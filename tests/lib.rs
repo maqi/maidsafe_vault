@@ -52,15 +52,14 @@ fn executable_test() {
                 Err(why) => panic!("couldn't spawn maidsafe_vault: {}", why.description()),
                 Ok(process) => process,
             });
-    thread::sleep_ms(30000);
 
     for i in 1..num_of_nodes {
+        thread::sleep_ms(10000);
         println!("---------- starting node {} --------------", i);
         processes.push(match Command::new(executable_path.to_path_buf()).stdout(Stdio::piped()).spawn() {
                     Err(why) => panic!("couldn't spawn maidsafe_vault: {}", why.description()),
                     Ok(process) => process,
                 });
-        thread::sleep_ms(30000);
     }
     thread::sleep_ms(60000);
     let mut test_failed = false;
