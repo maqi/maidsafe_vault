@@ -54,14 +54,14 @@ fn executable_test() {
             });
 
     for i in 1..num_of_nodes {
-        thread::sleep_ms(10);
+        thread::sleep_ms(30);
         println!("---------- starting node {} --------------", i);
         processes.push(match Command::new(executable_path.to_path_buf()).stdout(Stdio::piped()).spawn() {
                     Err(why) => panic!("couldn't spawn maidsafe_vault: {}", why.description()),
                     Ok(process) => process,
                 });
     }
-    thread::sleep_ms(15000);
+    thread::sleep_ms(60000);
     let mut test_failed = false;
     while let Some(mut process) = processes.pop() {
         let _ = process.kill();
