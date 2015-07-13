@@ -37,7 +37,7 @@ use std::io::Read;
 // also it depends a printout in routing lib. if such printout is changed / muted, this test needs to be updated
 fn executable_test() {
     let mut processes = Vec::new();
-    let num_of_nodes = 4;
+    let num_of_nodes = 8;
     let executable_path = match std::env::current_exe() {
         Ok(mut exe_path) => {
             exe_path.pop();
@@ -54,7 +54,7 @@ fn executable_test() {
             });
 
     for i in 1..num_of_nodes {
-        thread::sleep_ms(20000);
+        thread::sleep_ms(5000 + i * 2000);
         println!("---------- starting node {} --------------", i);
         processes.push(match Command::new(executable_path.to_path_buf()).stdout(Stdio::piped()).spawn() {
                     Err(why) => panic!("couldn't spawn maidsafe_vault: {}", why.description()),
