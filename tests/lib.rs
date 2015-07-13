@@ -52,7 +52,7 @@ fn executable_test() {
                 Err(why) => panic!("couldn't spawn maidsafe_vault: {}", why.description()),
                 Ok(process) => process,
             });
-    thread::sleep_ms(1000);
+    thread::sleep_ms(30000);
 
     for i in 1..num_of_nodes {
         println!("---------- starting node {} --------------", i);
