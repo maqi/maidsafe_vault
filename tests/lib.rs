@@ -37,7 +37,7 @@ use std::io::Read;
 // also it depends a printout in routing lib. if such printout is changed / muted, this test needs to be updated
 fn executable_test() {
     let mut processes = Vec::new();
-    let num_of_nodes = 8;
+    let num_of_nodes = 6;
     let executable_path = match std::env::current_exe() {
         Ok(mut exe_path) => {
             exe_path.pop();
