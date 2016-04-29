@@ -28,6 +28,7 @@ use error::InternalError;
 use itertools::Itertools;
 use kademlia_routing_table::{ContactInfo, GROUP_SIZE, RoutingTable};
 use maidsafe_utilities::serialisation;
+use message_filter::MessageFilter;
 use routing::{Authority, Data, DataIdentifier, MessageId, RequestMessage, StructuredData};
 use safe_network_common::client_errors::{MutationError, GetError};
 use vault::{CHUNK_STORE_PREFIX, NodeInfo, RoutingNode};
@@ -40,6 +41,10 @@ const ACCUMULATOR_QUORUM: usize = GROUP_SIZE / 2 + 1;
 const ACCUMULATOR_TIMEOUT_SECS: u64 = 180;
 /// The timeout for retrieving data chunks from individual peers.
 const GET_FROM_DATA_HOLDER_TIMEOUT_SECS: u64 = 60;
+/// The timeout for message_filter deletion.
+const MESSAGE_FILTER_TIMEOUT_SECS: u64 = 60;
+/// The version for structured_data delete notification.
+const DELETION_VERSION: u64 = 18_446_744_073_709_551_615;
 
 /// Specification of a particular version of a data chunk. For immutable data, the `u64` is always
 /// 0; for structured data, it specifies the version.
@@ -56,6 +61,8 @@ pub struct DataManager {
     routing_node: Rc<RoutingNode>,
     immutable_data_count: u64,
     structured_data_count: u64,
+    /// Deletion cache to prevent zombie data being restored through refresh
+    deletions: MessageFilter<DataIdentifier>,
 }
 
 impl Debug for DataManager {
@@ -80,6 +87,8 @@ impl DataManager {
             routing_node: routing_node,
             immutable_data_count: 0,
             structured_data_count: 0,
+            deletions: MessageFilter::with_expiry_duration(
+                            Duration::from_secs(MESSAGE_FILTER_TIMEOUT_SECS)),
         })
     }
 
@@ -146,6 +155,8 @@ impl DataManager {
                                           *message_id);
             return Err(From::from(error));
         }
+
+        let _ = self.deletions.remove(&data.identifier());
 
         if let Err(err) = self.chunk_store
                               .put(&data_identifier, data) {
@@ -221,23 +232,26 @@ impl DataManager {
                          new_data: &StructuredData,
                          message_id: &MessageId)
                          -> Result<(), InternalError> {
-        if let Ok(Data::Structured(data)) = self.chunk_store.get(&new_data.identifier()) {
+        let data_id = new_data.identifier();
+        if let Ok(Data::Structured(data)) = self.chunk_store.get(&data_id) {
             if data.validate_self_against_successor(&new_data).is_ok() {
-                if let Ok(()) = self.chunk_store.delete(&data.identifier()) {
+                if let Ok(()) = self.chunk_store.delete(&data_id) {
                     self.structured_data_count -= 1;
-                    trace!("DM deleted {:?}", data.identifier());
+                    trace!("DM deleted {:?}", data_id);
                     info!("{:?}", self);
                     let _ = self.routing_node
                                 .send_delete_success(request.dst.clone(),
                                                      request.src.clone(),
-                                                     data.identifier(),
+                                                     data_id.clone(),
                                                      *message_id);
-                    // TODO: Send a refresh message.
+                    let _ = self.deletions.insert(&data_id);
+                    let data_list = vec![(data_id, DELETION_VERSION)];
+                    let _ = self.send_refresh(Authority::NaeManager(new_data.name()), data_list);
                     return Ok(());
                 }
             }
         }
-        trace!("DM sending delete_failure for {:?}", new_data.identifier());
+        trace!("DM sending delete_failure for {:?}", data_id);
         try!(self.routing_node.send_delete_failure(request.dst.clone(),
                                                    request.src.clone(),
                                                    request.clone(),
@@ -334,6 +348,17 @@ impl DataManager {
                 let data_needed = match data_id {
                     DataIdentifier::Immutable(..) => !self.chunk_store.has(&data_id),
                     DataIdentifier::Structured(..) => {
+                        if self.deletions.contains(&data_id) {
+                            trace!("DM rejected refreshed in data {:?} as it's deleted", data_id);
+                            continue;
+                        }
+                        if version == DELETION_VERSION {
+                            trace!("DM received refreshing deletion of data {:?}", data_id);
+                            let _ = self.chunk_store.delete(&data_id);
+                            let _ = self.deletions.insert(&data_id);
+                            continue;
+                        }
+
                         match self.chunk_store.get(&data_id) {
                             Err(_) => true, // We don't have the data, so we need to retrieve it.
                             Ok(Data::Structured(sd)) => sd.get_version() < version,
