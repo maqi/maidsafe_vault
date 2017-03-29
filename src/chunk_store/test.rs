@@ -27,6 +27,7 @@ macro_rules! assert_err {
 use chunk_store::{ChunkStore, Error};
 use maidsafe_utilities::serialisation;
 use rand::{self, Rng};
+use std::time::{Duration, Instant};
 use tempdir::TempDir;
 
 fn generate_random_bytes(size: u64) -> Vec<u8> {
@@ -210,4 +211,25 @@ fn keys() {
         assert_eq!(chunk_store.keys().len(),
                    chunks.data_and_sizes.len() - index - 1);
     }
+}
+
+#[test]
+fn performance() {
+    let one_mb = 1024 * 1024;
+    let nums = 100;
+    let mut data = generate_random_bytes(one_mb);
+    let root = unwrap!(TempDir::new("test"));
+    // 1MB (1048576) random data will have 1048584 serialised size.
+    let mut chunk_store = unwrap!(ChunkStore::new(root.path().to_path_buf(), nums * (one_mb + 8)));
+    let mut total_time = Duration::new(0, 0);
+    for i in 0..100 {
+        let begin = Instant::now();
+        match chunk_store.put(&i, &data) {
+            Ok(_) => {}
+            Err(err) => println!("{:?} / {:?}", i, err),
+        }
+        total_time += Instant::now() - begin;
+        data[i] = generate_random_bytes(1)[0];
+    }
+    println!("completed with {:?} MB/s", nums / (total_time.as_secs() + 1))
 }
