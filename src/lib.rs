@@ -239,7 +239,7 @@ extern crate tiny_keccak;
 extern crate unwrap;
 
 mod cache;
-mod chunk_store;
+pub mod chunk_store;
 mod config_handler;
 mod error;
 /// For integration tests only
