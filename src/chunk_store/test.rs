@@ -27,6 +27,7 @@ macro_rules! assert_err {
 use chunk_store::{ChunkStore, Error};
 use maidsafe_utilities::serialisation;
 use rand::{self, Rng};
+use std::time::{Duration, Instant};
 use tempdir::TempDir;
 
 fn generate_random_bytes(size: u64) -> Vec<u8> {
@@ -209,4 +210,31 @@ fn keys() {
         assert_eq!(chunk_store.keys().len(),
                    chunks.data_and_sizes.len() - index - 1);
     }
+}
+
+#[test]
+fn performance() {
+    let one_mb = 1024 * 1024;
+    let nums = 100;
+    let mut data = generate_random_bytes(one_mb);
+    let root = unwrap!(TempDir::new("test"));
+    // 1MB (1048576) random data will have 1048584 serialised size.
+    let mut chunk_store = unwrap!(ChunkStore::new(root.path().to_path_buf(), nums * (one_mb + 8)));
+    let mut write_total_time = Duration::new(0, 0);
+    let mut read_total_time = Duration::new(0, 0);
+
+    for i in 0..nums as usize {
+        let write_begin = Instant::now();
+        unwrap!(chunk_store.put(&i, &data));
+        write_total_time += write_begin.elapsed();
+        data[i] = generate_random_bytes(1)[0];
+
+        let get_index = rand::thread_rng().gen_range(0, i + 1);
+        let read_begin = Instant::now();
+        let _ = unwrap!(chunk_store.get(&get_index));
+        read_total_time += read_begin.elapsed();
+    }
+    println!("completed with {:?} MB/s writing speed and {:?} MB/s reading speed",
+             nums / (write_total_time.as_secs() + 1),
+             nums / (read_total_time.as_secs() + 1))
 }
