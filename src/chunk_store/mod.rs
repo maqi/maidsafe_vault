@@ -19,7 +19,7 @@
 //! A simple, non-persistent, disk-based key-value store.
 
 use fs2::FileExt;
-use hex::{FromHex, ToHex};
+use hex::ToHex;
 use maidsafe_utilities::serialisation::{self, SerialisationError};
 use serde::{Deserialize, Serialize};
 use std::cmp;
@@ -29,8 +29,10 @@ use std::marker::PhantomData;
 use std::path::{Path, PathBuf};
 
 use maidsafe_utilities::thread;
+use rust_sodium::crypto::hash::sha256;
 use std::collections::HashMap;
 use std::str::FromStr;
+use std::string::String;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -81,7 +83,9 @@ pub struct ChunkStore<Key, Value> {
     lock_file: Option<File>,
     max_space: u64,
     used_space: u64,
-    workers: HashMap<::std::string::String, (Arc<AtomicBool>, thread::Joiner)>,
+    workers: HashMap<String, (Arc<AtomicBool>, thread::Joiner)>,
+    // <serialised_key, file_name>
+    file_name_map: HashMap<Vec<u8>, String>,
     phantom: PhantomData<(Key, Value)>,
 }
 
@@ -100,8 +104,16 @@ impl<Key, Value> ChunkStore<Key, Value>
                max_space: max_space,
                used_space: 0,
                workers: Default::default(),
+               file_name_map: Default::default(),
                phantom: PhantomData,
            })
+    }
+
+    fn key_to_name(&self, key: &Key) -> Result<(Vec<u8>, String), Error> {
+        let serialised_key = serialisation::serialise(key)?;
+        let mut file_name = sha256::hash(serialised_key.as_slice()).0.to_hex();
+        file_name.truncate(8);
+        Ok((serialised_key, file_name))
     }
 
     /// Stores a new data chunk under `key`.
@@ -117,9 +129,9 @@ impl<Key, Value> ChunkStore<Key, Value>
         if self.used_space + serialised_value.len() as u64 > self.max_space {
             return Err(Error::NotEnoughSpace);
         }
-        let filename = serialisation::serialise(key)?.to_hex();
+        let (serialised_key, file_name) = self.key_to_name(key)?;
         // If a file corresponding to 'key' already exists, delete it.
-        let file_path = self.file_path(key)?;
+        let file_path = self.file_path(&file_name)?;
         let _ = self.do_delete(&file_path);
         self.used_space += serialised_value.len() as u64;
 
@@ -134,7 +146,8 @@ impl<Key, Value> ChunkStore<Key, Value>
                           });
             atomic_completed_clone.store(true, Ordering::Relaxed);
         });
-        let _ = self.workers.insert(filename, (atomic_completed, joiner));
+        let _ = self.workers.insert(file_name.clone(), (atomic_completed, joiner));
+        let _ = self.file_name_map.insert(serialised_key, file_name);
         Ok(())
     }
 
@@ -143,20 +156,20 @@ impl<Key, Value> ChunkStore<Key, Value>
     /// Removes completed worker threads from map.
     /// Waits till the specific thread completed, if exists.
     pub fn clean_up_threads(&mut self, key: &Key) -> Result<(), Error> {
-        let filename = serialisation::serialise(key)?.to_hex();
-        let _ = self.workers.remove(&filename);
+        let (_, file_name) = self.key_to_name(key)?;
+        let _ = self.workers.remove(&file_name);
 
         let mut completed_threads = Vec::new();
-        for (filename, &(ref atomic_completed, _)) in self.workers.iter() {
+        for (serialised_key, &(ref atomic_completed, _)) in self.workers.iter() {
             if atomic_completed.load(Ordering::Relaxed) {
-                match ::std::string::String::from_str(filename) {
+                match String::from_str(serialised_key) {
                     Ok(name) => completed_threads.push(name),
                     Err(_) => {}
                 }
             }
         }
-        for filename in &completed_threads {
-            let _ = self.workers.remove(filename);
+        for file_name in &completed_threads {
+            let _ = self.workers.remove(file_name);
         }
         Ok(())
     }
@@ -166,7 +179,10 @@ impl<Key, Value> ChunkStore<Key, Value>
     /// If the data doesn't exist, it does nothing and returns `Ok`.  In the case of an IO error, it
     /// returns `Error::Io`.
     pub fn delete(&mut self, key: &Key) -> Result<(), Error> {
-        let file_path = self.file_path(key)?;
+        self.clean_up_threads(key)?;
+        let (serialised_key, file_name) = self.key_to_name(key)?;
+        let _ = self.file_name_map.remove(&serialised_key);
+        let file_path = self.file_path(&file_name)?;
         self.do_delete(&file_path)
     }
 
@@ -174,7 +190,8 @@ impl<Key, Value> ChunkStore<Key, Value>
     ///
     /// If the data file can't be accessed, it returns `Error::ChunkNotFound`.
     pub fn get(&self, key: &Key) -> Result<Value, Error> {
-        match File::open(self.file_path(key)?) {
+        let (_, file_name) = self.key_to_name(key)?;
+        match File::open(self.file_path(&file_name)?) {
             Ok(mut file) => {
                 let mut contents = Vec::<u8>::new();
                 let _ = file.read_to_end(&mut contents)?;
@@ -186,34 +203,17 @@ impl<Key, Value> ChunkStore<Key, Value>
 
     /// Tests if a data chunk has been previously stored under `key`.
     pub fn has(&self, key: &Key) -> bool {
-        let file_path = if let Ok(path) = self.file_path(key) {
-            path
-        } else {
-            return false;
-        };
-        if let Ok(metadata) = fs::metadata(file_path) {
-            return metadata.is_file();
-        } else {
-            false
-        }
+        match self.key_to_name(key) {
+            Ok((serialised_key, _)) => self.file_name_map.contains_key(&serialised_key),
+            Err(_) => false,
+        }        
     }
 
     /// Lists all keys of currently-data stored.
     pub fn keys(&self) -> Vec<Key> {
-        fs::read_dir(&self.rootdir)
-            .and_then(|dir_entries| {
-                let dir_entry_to_routing_name = |dir_entry: io::Result<fs::DirEntry>| {
-                    dir_entry
-                        .ok()
-                        .and_then(|entry| entry.file_name().into_string().ok())
-                        .and_then(|hex_name| FromHex::from_hex(hex_name.into_bytes()).ok())
-                        .and_then(|bytes: Vec<u8>| serialisation::deserialise::<Key>(&*bytes).ok())
-                };
-                Ok(dir_entries
-                       .filter_map(dir_entry_to_routing_name)
-                       .collect())
-            })
-            .unwrap_or_else(|_| Vec::new())
+        self.file_name_map.keys().filter_map(|serialised_key|
+            serialisation::deserialise::<Key>(serialised_key.as_slice()).ok()
+        ).collect()
     }
 
     /// Returns the maximum amount of storage space available for this ChunkStore.
@@ -257,9 +257,8 @@ impl<Key, Value> ChunkStore<Key, Value>
         }
     }
 
-    fn file_path(&self, key: &Key) -> Result<PathBuf, Error> {
-        let filename = serialisation::serialise(key)?.to_hex();
-        let path_name = Path::new(&filename);
+    fn file_path(&self, file_name: &String) -> Result<PathBuf, Error> {
+        let path_name = Path::new(file_name);
         Ok(self.rootdir.join(path_name))
     }
 }
