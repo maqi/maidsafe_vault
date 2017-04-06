@@ -58,7 +58,7 @@ fn bench_write(b: &mut Bencher) {
     let root = unwrap!(TempDir::new("test"));
     // 1MB (1048576) random data will have 1048584 serialised size.
     let mut chunk_store = unwrap!(ChunkStore::new(root.path().to_path_buf(), 1024 * one_mb));
-    b.iter(|| unwrap!(chunk_store.put(&1000, &data)));
+    b.iter(|| unwrap!(chunk_store.put(&rand::thread_rng().gen_range(0, 1000), &data)));
 }
 
 #[bench]
@@ -74,6 +74,8 @@ fn bench_read(b: &mut Bencher) {
     }
 
     b.iter(|| {
-               let _ = unwrap!(chunk_store.get(&rand::thread_rng().gen_range(0, nums as usize)));
+               let key = rand::thread_rng().gen_range(0, nums as usize);
+               let _ = chunk_store.clean_up_threads(&key);
+               let _ = unwrap!(chunk_store.get(&key));
            });
 }

@@ -231,6 +231,7 @@ fn performance() {
 
         let get_index = rand::thread_rng().gen_range(0, i + 1);
         let read_begin = Instant::now();
+        let _ = chunk_store.clean_up_threads(&get_index);
         let _ = unwrap!(chunk_store.get(&get_index));
         read_total_time += read_begin.elapsed();
     }

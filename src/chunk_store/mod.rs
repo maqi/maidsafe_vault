@@ -28,6 +28,12 @@ use std::io::{self, Read, Write};
 use std::marker::PhantomData;
 use std::path::{Path, PathBuf};
 
+use maidsafe_utilities::thread;
+use std::collections::HashMap;
+use std::str::FromStr;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+
 /// The max name length for a chunk file.
 const MAX_CHUNK_FILE_NAME_LENGTH: usize = 104;
 /// The name of the lock file for the chunk directory.
@@ -75,6 +81,7 @@ pub struct ChunkStore<Key, Value> {
     lock_file: Option<File>,
     max_space: u64,
     used_space: u64,
+    workers: HashMap<::std::string::String, (Arc<AtomicBool>, thread::Joiner)>,
     phantom: PhantomData<(Key, Value)>,
 }
 
@@ -92,6 +99,7 @@ impl<Key, Value> ChunkStore<Key, Value>
                lock_file: Some(lock_file),
                max_space: max_space,
                used_space: 0,
+               workers: Default::default(),
                phantom: PhantomData,
            })
     }
@@ -103,26 +111,54 @@ impl<Key, Value> ChunkStore<Key, Value>
     ///
     /// If the key already exists, it will be overwritten.
     pub fn put(&mut self, key: &Key, value: &Value) -> Result<(), Error> {
+        self.clean_up_threads(key)?;
+
         let serialised_value = serialisation::serialise(value)?;
         if self.used_space + serialised_value.len() as u64 > self.max_space {
             return Err(Error::NotEnoughSpace);
         }
-
+        let filename = serialisation::serialise(key)?.to_hex();
         // If a file corresponding to 'key' already exists, delete it.
         let file_path = self.file_path(key)?;
         let _ = self.do_delete(&file_path);
+        self.used_space += serialised_value.len() as u64;
 
-        // Write the file.
-        File::create(&file_path)
-            .and_then(|mut file| {
-                          file.write_all(&serialised_value)
-                    .and_then(|()| file.sync_all())
-                    .and_then(|()| file.metadata())
-                    .map(|metadata| {
-                        self.used_space += metadata.len();
-                    })
-                      })
-            .map_err(From::from)
+        let atomic_completed = Arc::new(AtomicBool::new(false));
+        let atomic_completed_clone = atomic_completed.clone();
+        let joiner = thread::named("background_put", move || {
+            // Write the file.
+            let _ = File::create(&file_path)
+                .and_then(|mut file| {
+                              file.write_all(&serialised_value)
+                        .and_then(|()| file.sync_all())
+                          });
+            atomic_completed_clone.store(true, Ordering::Relaxed);
+        });
+        let _ = self.workers.insert(filename, (atomic_completed, joiner));
+        Ok(())
+    }
+
+    /// Clean up threads
+    ///
+    /// Removes completed worker threads from map.
+    /// Waits till the specific thread completed, if exists.
+    pub fn clean_up_threads(&mut self, key: &Key) -> Result<(), Error> {
+        let filename = serialisation::serialise(key)?.to_hex();
+        let _ = self.workers.remove(&filename);
+
+        let mut completed_threads = Vec::new();
+        for (filename, &(ref atomic_completed, _)) in self.workers.iter() {
+            if atomic_completed.load(Ordering::Relaxed) {
+                match ::std::string::String::from_str(filename) {
+                    Ok(name) => completed_threads.push(name),
+                    Err(_) => {}
+                }
+            }
+        }
+        for filename in &completed_threads {
+            let _ = self.workers.remove(filename);
+        }
+        Ok(())
     }
 
     /// Deletes the data chunk stored under `key`.
