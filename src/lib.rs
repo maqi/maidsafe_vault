@@ -223,20 +223,20 @@ extern crate maidsafe_utilities;
 extern crate config_file_handler;
 #[macro_use]
 extern crate quick_error;
-#[cfg(any(test, feature = "use-mock-crust"))]
-extern crate rand;
+// #[cfg(any(test, feature = "use-mock-crust"))]
+// extern crate rand;
 extern crate routing;
 extern crate rust_sodium;
-extern crate serde;
+// extern crate serde;
 #[macro_use]
 extern crate serde_derive;
 extern crate serde_json;
-#[cfg(test)]
-extern crate tempdir;
+// #[cfg(test)]
+// extern crate tempdir;
 extern crate tiny_keccak;
-#[cfg(any(test, feature = "use-mock-crust"))]
-#[macro_use]
-extern crate unwrap;
+// #[cfg(any(test, feature = "use-mock-crust"))]
+// #[macro_use]
+// extern crate unwrap;
 
 mod cache;
 pub mod chunk_store;

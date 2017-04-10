@@ -21,11 +21,10 @@
 use fs2::FileExt;
 use hex::ToHex;
 use maidsafe_utilities::serialisation::{self, SerialisationError};
-use serde::{Deserialize, Serialize};
+// use serde::{Deserialize, Serialize};
 use std::cmp;
 use std::fs::{self, File};
 use std::io::{self, Read, Write};
-use std::marker::PhantomData;
 use std::path::{Path, PathBuf};
 
 use maidsafe_utilities::thread;
@@ -35,6 +34,7 @@ use std::str::FromStr;
 use std::string::String;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use routing::{Data, DataIdentifier};
 
 /// The max name length for a chunk file.
 const MAX_CHUNK_FILE_NAME_LENGTH: usize = 104;
@@ -78,7 +78,7 @@ quick_error! {
 /// usage to restrict storage.
 ///
 /// The data chunks are deleted when the `ChunkStore` goes out of scope.
-pub struct ChunkStore<Key, Value> {
+pub struct ChunkStore {
     rootdir: PathBuf,
     lock_file: Option<File>,
     max_space: u64,
@@ -86,17 +86,13 @@ pub struct ChunkStore<Key, Value> {
     workers: HashMap<String, (Arc<AtomicBool>, thread::Joiner)>,
     // <serialised_key, file_name>
     file_name_map: HashMap<Vec<u8>, String>,
-    phantom: PhantomData<(Key, Value)>,
 }
 
-impl<Key, Value> ChunkStore<Key, Value>
-    where Key: Serialize + Deserialize,
-          Value: Serialize + Deserialize
-{
+impl ChunkStore {
     /// Creates a new `ChunkStore` with `max_space` allowed storage space.
     ///
     /// The data is stored in a root directory. If `root` doesn't exist, it will be created.
-    pub fn new(root: PathBuf, max_space: u64) -> Result<ChunkStore<Key, Value>, Error> {
+    pub fn new(root: PathBuf, max_space: u64) -> Result<ChunkStore, Error> {
         let lock_file = Self::lock_and_clear_dir(&root)?;
         Ok(ChunkStore {
                rootdir: root,
@@ -105,11 +101,10 @@ impl<Key, Value> ChunkStore<Key, Value>
                used_space: 0,
                workers: Default::default(),
                file_name_map: Default::default(),
-               phantom: PhantomData,
            })
     }
 
-    fn key_to_name(&self, key: &Key) -> Result<(Vec<u8>, String), Error> {
+    fn key_to_name(&self, key: &DataIdentifier) -> Result<(Vec<u8>, String), Error> {
         let serialised_key = serialisation::serialise(key)?;
         let mut file_name = sha256::hash(serialised_key.as_slice()).0.to_hex();
         file_name.truncate(8);
@@ -122,10 +117,20 @@ impl<Key, Value> ChunkStore<Key, Value>
     /// an IO error, it returns `Error::Io`.
     ///
     /// If the key already exists, it will be overwritten.
-    pub fn put(&mut self, key: &Key, value: &Value) -> Result<(), Error> {
+    pub fn put(&mut self, key: &DataIdentifier, value: &Data) -> Result<(), Error> {
         self.clean_up_threads(key)?;
 
-        let serialised_value = serialisation::serialise(value)?;
+        let serialised_value = match key {
+                &DataIdentifier::Immutable(..) => {
+                    if let &Data::Immutable(ref im) = value {
+                        im.value().iter().cloned().collect()
+                    } else {
+                        return Err(Error::NotEnoughSpace);
+                    }
+                }
+                _ => serialisation::serialise(value)?,
+                
+            };
         if self.used_space + serialised_value.len() as u64 > self.max_space {
             return Err(Error::NotEnoughSpace);
         }
@@ -155,7 +160,7 @@ impl<Key, Value> ChunkStore<Key, Value>
     ///
     /// Removes completed worker threads from map.
     /// Waits till the specific thread completed, if exists.
-    pub fn clean_up_threads(&mut self, key: &Key) -> Result<(), Error> {
+    pub fn clean_up_threads(&mut self, key: &DataIdentifier) -> Result<(), Error> {
         let (_, file_name) = self.key_to_name(key)?;
         let _ = self.workers.remove(&file_name);
 
@@ -178,7 +183,7 @@ impl<Key, Value> ChunkStore<Key, Value>
     ///
     /// If the data doesn't exist, it does nothing and returns `Ok`.  In the case of an IO error, it
     /// returns `Error::Io`.
-    pub fn delete(&mut self, key: &Key) -> Result<(), Error> {
+    pub fn delete(&mut self, key: &DataIdentifier) -> Result<(), Error> {
         self.clean_up_threads(key)?;
         let (serialised_key, file_name) = self.key_to_name(key)?;
         let _ = self.file_name_map.remove(&serialised_key);
@@ -189,20 +194,20 @@ impl<Key, Value> ChunkStore<Key, Value>
     /// Returns a data chunk previously stored under `key`.
     ///
     /// If the data file can't be accessed, it returns `Error::ChunkNotFound`.
-    pub fn get(&self, key: &Key) -> Result<Value, Error> {
+    pub fn get(&self, key: &DataIdentifier) -> Result<Data, Error> {
         let (_, file_name) = self.key_to_name(key)?;
         match File::open(self.file_path(&file_name)?) {
             Ok(mut file) => {
                 let mut contents = Vec::<u8>::new();
                 let _ = file.read_to_end(&mut contents)?;
-                Ok(serialisation::deserialise::<Value>(&contents)?)
+                Ok(serialisation::deserialise::<Data>(&contents)?)
             }
             Err(_) => Err(Error::NotFound),
         }
     }
 
     /// Tests if a data chunk has been previously stored under `key`.
-    pub fn has(&self, key: &Key) -> bool {
+    pub fn has(&self, key: &DataIdentifier) -> bool {
         match self.key_to_name(key) {
             Ok((serialised_key, _)) => self.file_name_map.contains_key(&serialised_key),
             Err(_) => false,
@@ -210,9 +215,9 @@ impl<Key, Value> ChunkStore<Key, Value>
     }
 
     /// Lists all keys of currently-data stored.
-    pub fn keys(&self) -> Vec<Key> {
+    pub fn keys(&self) -> Vec<DataIdentifier> {
         self.file_name_map.keys().filter_map(|serialised_key|
-            serialisation::deserialise::<Key>(serialised_key.as_slice()).ok()
+            serialisation::deserialise::<DataIdentifier>(serialised_key.as_slice()).ok()
         ).collect()
     }
 
@@ -263,12 +268,12 @@ impl<Key, Value> ChunkStore<Key, Value>
     }
 }
 
-impl<Key, Value> Drop for ChunkStore<Key, Value> {
+impl Drop for ChunkStore {
     fn drop(&mut self) {
         let _ = self.lock_file.take().iter().map(File::unlock);
         let _ = fs::remove_dir_all(&self.rootdir);
     }
 }
 
-#[cfg(test)]
-mod test;
+// #[cfg(test)]
+// mod test;

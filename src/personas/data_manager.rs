@@ -372,7 +372,7 @@ impl Cache {
 
 
 pub struct DataManager {
-    chunk_store: ChunkStore<DataIdentifier, Data>,
+    chunk_store: ChunkStore,
     /// Accumulates refresh messages and the peers we received them from.
     refresh_accumulator: Accumulator<IdAndVersion, XorName>,
     cache: Cache,

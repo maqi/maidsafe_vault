@@ -33,6 +33,7 @@
 #![feature(test)]
 
 extern crate rand;
+extern crate routing;
 extern crate safe_vault;
 extern crate tempdir;
 extern crate test;
@@ -43,6 +44,7 @@ use rand::Rng;
 use safe_vault::chunk_store::ChunkStore;
 use tempdir::TempDir;
 use test::Bencher;
+use routing::{Data, DataIdentifier, ImmutableData};
 
 fn generate_random_bytes(size: u64) -> Vec<u8> {
     rand::thread_rng()
@@ -54,28 +56,34 @@ fn generate_random_bytes(size: u64) -> Vec<u8> {
 #[bench]
 fn bench_write(b: &mut Bencher) {
     let one_mb = 1024 * 1024;
-    let data = generate_random_bytes(one_mb);
+    let raw_data = generate_random_bytes(one_mb);
+    let data = Data::Immutable(ImmutableData::new(raw_data));
     let root = unwrap!(TempDir::new("test"));
     // 1MB (1048576) random data will have 1048584 serialised size.
     let mut chunk_store = unwrap!(ChunkStore::new(root.path().to_path_buf(), 1024 * one_mb));
-    b.iter(|| unwrap!(chunk_store.put(&rand::thread_rng().gen_range(0, 1000), &data)));
-}
-
-#[bench]
-fn bench_read(b: &mut Bencher) {
-    let one_mb = 1024 * 1024;
-    let nums = 100;
-    let data = generate_random_bytes(one_mb);
-    let root = unwrap!(TempDir::new("test"));
-    // 1MB (1048576) random data will have 1048584 serialised size.
-    let mut chunk_store = unwrap!(ChunkStore::new(root.path().to_path_buf(), nums * (one_mb + 8)));
-    for i in 0..nums as usize {
-        unwrap!(chunk_store.put(&i, &data));
-    }
-
     b.iter(|| {
-               let key = rand::thread_rng().gen_range(0, nums as usize);
-               let _ = chunk_store.clean_up_threads(&key);
-               let _ = unwrap!(chunk_store.get(&key));
-           });
+        // let value = rand::thread_rng().gen_range(0, 1000);
+        // let name = DataIdentifier::Immutable(XorName([value as u8; 32]));
+        let name = DataIdentifier::Immutable(rand::random());
+        unwrap!(chunk_store.put(&name, &data))
+    });
 }
+
+// #[bench]
+// fn bench_read(b: &mut Bencher) {
+//     let one_mb = 1024 * 1024;
+//     let nums = 100;
+//     let data = generate_random_bytes(one_mb);
+//     let root = unwrap!(TempDir::new("test"));
+//     // 1MB (1048576) random data will have 1048584 serialised size.
+//     let mut chunk_store = unwrap!(ChunkStore::new(root.path().to_path_buf(), nums * (one_mb + 8)));
+//     for i in 0..nums as usize {
+//         unwrap!(chunk_store.put(&i, &data));
+//     }
+
+//     b.iter(|| {
+//                let key = rand::thread_rng().gen_range(0, nums as usize);
+//                let _ = chunk_store.clean_up_threads(&key);
+//                let _ = unwrap!(chunk_store.get(&key));
+//            });
+// }
