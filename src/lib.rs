@@ -214,7 +214,7 @@
 
 extern crate accumulator;
 extern crate fs2;
-extern crate hex;
+// extern crate hex;
 #[macro_use]
 extern crate log;
 extern crate lru_time_cache;

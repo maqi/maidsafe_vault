@@ -19,7 +19,7 @@
 //! A simple, non-persistent, disk-based key-value store.
 
 use fs2::FileExt;
-use hex::ToHex;
+// use hex::ToHex;
 use maidsafe_utilities::serialisation::{self, SerialisationError};
 // use serde::{Deserialize, Serialize};
 use std::cmp;
@@ -28,18 +28,22 @@ use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 
 use maidsafe_utilities::thread;
-use rust_sodium::crypto::hash::sha256;
 use std::collections::HashMap;
 use std::str::FromStr;
 use std::string::String;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use routing::{Data, DataIdentifier};
+use tiny_keccak::sha3_224;
 
 /// The max name length for a chunk file.
 const MAX_CHUNK_FILE_NAME_LENGTH: usize = 104;
 /// The name of the lock file for the chunk directory.
 const LOCK_FILE_NAME: &'static str = "lock";
+
+const ALPHABET_NUMBERIC_TABLE : [char; 32] =
+    ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'A', 'B', 'C', 'D', 'E', 'F',
+     'G', 'H', 'J', 'K', 'L', 'M', 'N', 'P', 'Q', 'R', 'S', 'T', 'V', 'W', 'X', 'Y'];
 
 quick_error! {
     /// `ChunkStore` error.
@@ -72,7 +76,24 @@ quick_error! {
     }
 }
 
+fn key_to_name(key: &DataIdentifier) -> Result<(Vec<u8>, String), Error> {
+    let serialised_key = serialisation::serialise(key)?;
+    let mut file_name = to_alpha_num(sha3_224(serialised_key.as_slice()))?;
+    file_name.truncate(16);
+    Ok((serialised_key, file_name))
+}
 
+fn to_alpha_num(input: [u8; 28]) -> Result<String, Error> {
+    let mut result = input;
+    for mut it in result.iter_mut() {
+        let entry = *it;
+        *it = ALPHABET_NUMBERIC_TABLE[(entry >> 4) as usize] as u8;
+    }
+    match String::from_utf8(result.to_vec()) {
+        Ok(string) => Ok(string),
+        Err(_) => Err(Error::NotFound),
+    }
+}
 
 /// `ChunkStore` is a store of data held as serialised files on disk, implementing a maximum disk
 /// usage to restrict storage.
@@ -104,13 +125,6 @@ impl ChunkStore {
            })
     }
 
-    fn key_to_name(&self, key: &DataIdentifier) -> Result<(Vec<u8>, String), Error> {
-        let serialised_key = serialisation::serialise(key)?;
-        let mut file_name = sha256::hash(serialised_key.as_slice()).0.to_hex();
-        file_name.truncate(8);
-        Ok((serialised_key, file_name))
-    }
-
     /// Stores a new data chunk under `key`.
     ///
     /// If there is not enough storage space available, returns `Error::NotEnoughSpace`.  In case of
@@ -134,7 +148,7 @@ impl ChunkStore {
         if self.used_space + serialised_value.len() as u64 > self.max_space {
             return Err(Error::NotEnoughSpace);
         }
-        let (serialised_key, file_name) = self.key_to_name(key)?;
+        let (serialised_key, file_name) = key_to_name(key)?;
         // If a file corresponding to 'key' already exists, delete it.
         let file_path = self.file_path(&file_name)?;
         let _ = self.do_delete(&file_path);
@@ -161,7 +175,7 @@ impl ChunkStore {
     /// Removes completed worker threads from map.
     /// Waits till the specific thread completed, if exists.
     pub fn clean_up_threads(&mut self, key: &DataIdentifier) -> Result<(), Error> {
-        let (_, file_name) = self.key_to_name(key)?;
+        let (_, file_name) = key_to_name(key)?;
         let _ = self.workers.remove(&file_name);
 
         let mut completed_threads = Vec::new();
@@ -185,7 +199,7 @@ impl ChunkStore {
     /// returns `Error::Io`.
     pub fn delete(&mut self, key: &DataIdentifier) -> Result<(), Error> {
         self.clean_up_threads(key)?;
-        let (serialised_key, file_name) = self.key_to_name(key)?;
+        let (serialised_key, file_name) = key_to_name(key)?;
         let _ = self.file_name_map.remove(&serialised_key);
         let file_path = self.file_path(&file_name)?;
         self.do_delete(&file_path)
@@ -195,7 +209,7 @@ impl ChunkStore {
     ///
     /// If the data file can't be accessed, it returns `Error::ChunkNotFound`.
     pub fn get(&self, key: &DataIdentifier) -> Result<Data, Error> {
-        let (_, file_name) = self.key_to_name(key)?;
+        let (_, file_name) = key_to_name(key)?;
         match File::open(self.file_path(&file_name)?) {
             Ok(mut file) => {
                 let mut contents = Vec::<u8>::new();
@@ -208,7 +222,7 @@ impl ChunkStore {
 
     /// Tests if a data chunk has been previously stored under `key`.
     pub fn has(&self, key: &DataIdentifier) -> bool {
-        match self.key_to_name(key) {
+        match key_to_name(key) {
             Ok((serialised_key, _)) => self.file_name_map.contains_key(&serialised_key),
             Err(_) => false,
         }        
