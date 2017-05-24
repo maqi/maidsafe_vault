@@ -138,10 +138,10 @@ impl Vault {
                 res = EventResult::Terminate;
                 Ok(())
             }
+            Event::Tick => self.maid_manager.handle_tick(&mut self.routing_node),
             Event::SectionSplit(_) |
             Event::SectionMerge(_) |
-            Event::Connected |
-            Event::Tick => {
+            Event::Connected => {
                 res = EventResult::Ignored;
                 Ok(())
             }
@@ -164,9 +164,9 @@ impl Vault {
             // ================== Refresh ==================
             (Authority::ClientManager(_),
              Authority::ClientManager(_),
-             Request::Refresh(serialised_msg, _)) => {
+             Request::Refresh(serialised_msg, msg_id)) => {
                 self.maid_manager
-                    .handle_refresh(&mut self.routing_node, &serialised_msg)
+                    .handle_refresh(&mut self.routing_node, &serialised_msg, msg_id)
             }
             (Authority::ManagedNode(src_name),
              Authority::ManagedNode(_),
