@@ -266,5 +266,8 @@ pub const GROUP_SIZE: usize = 8;
 /// The minimal number of nodes in group to reach consensus.
 pub const QUORUM: usize = GROUP_SIZE / 2 + 1;
 
+/// The number of nodes needed to achieve consensus.
+pub const QUORUM: usize = GROUP_SIZE / 2 + 1;
+
 /// The type tag of invitations to create an account.
 pub const TYPE_TAG_INVITE: u64 = 8;

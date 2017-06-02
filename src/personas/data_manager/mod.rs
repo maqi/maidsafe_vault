@@ -69,8 +69,8 @@ impl ChunkId<DataId> for MutableDataId {
 
 pub struct DataManager {
     chunk_store: ChunkStore<DataId>,
-    /// Accumulates refresh messages and the peers we received them from.
-    refresh_accumulator: Accumulator<FragmentInfo, XorName>,
+    chunk_refresh_accumulator: Accumulator<MutableDataId, XorName>,
+    fragment_refresh_accumulator: Accumulator<FragmentInfo, XorName>,
     cache: Cache,
     mdata_cache: MutableDataCache,
     immutable_data_count: u64,
@@ -86,7 +86,9 @@ impl DataManager {
 
         Ok(DataManager {
                chunk_store: chunk_store,
-               refresh_accumulator: Accumulator::with_duration(QUORUM, accumulator_duration),
+               chunk_refresh_accumulator: Accumulator::with_duration(QUORUM, accumulator_duration),
+               fragment_refresh_accumulator: Accumulator::with_duration(QUORUM,
+                                                                        accumulator_duration),
                cache: Default::default(),
                mdata_cache: MutableDataCache::new(),
                immutable_data_count: 0,
@@ -107,60 +109,15 @@ impl DataManager {
                           src: XorName,
                           serialised_refresh: &[u8])
                           -> Result<(), InternalError> {
-        let fragments: Vec<FragmentInfo> = serialisation::deserialise(serialised_refresh)?;
-        for fragment in fragments {
-            if self.cache
-                   .register_needed_fragment_with_another_holder(fragment.clone(), src) {
-                continue;
-            }
-
-            if let Some(holders) = self.refresh_accumulator
-                   .add(fragment.clone(), src)
-                   .cloned() {
-                self.refresh_accumulator.delete(&fragment);
-
-                let needed = match fragment {
-                    FragmentInfo::ImmutableData(name) => {
-                        !self.chunk_store.has(&ImmutableDataId(name))
-                    }
-                    FragmentInfo::MutableData(name, tag) => {
-                        !self.chunk_store.has(&MutableDataId(name, tag))
-                    }
-                    FragmentInfo::MutableDataShell { name, tag, version, .. } => {
-                        match self.chunk_store.get(&MutableDataId(name, tag)) {
-                            Err(_) => true,
-                            Ok(data) => data.version() < version,
-                        }
-                    }
-                    FragmentInfo::MutableDataEntry {
-                        name,
-                        tag,
-                        ref key,
-                        version,
-                        ..
-                    } => {
-                        if let Ok(data) = self.chunk_store.get(&MutableDataId(name, tag)) {
-                            match data.get(key) {
-                                None => true,
-                                Some(value) if value.entry_version < version => true,
-                                Some(_) => false,
-                            }
-                        } else {
-                            true
-                        }
-                    }
-                };
-
-                if needed {
-                    for holder in holders {
-                        self.cache
-                            .insert_needed_fragment(fragment.clone(), holder);
-                    }
-                }
-            }
+        let refreshes: Vec<Refresh> = serialisation::deserialise(serialised_refresh)?;
+        for refresh in refreshes {
+            match refresh {
+                Refresh::Chunk(data_id) => self.handle_chunk_refresh(src, data_id),
+                Refresh::Fragment(fragment) => self.handle_fragment_refresh(src, fragment),
+            }?
         }
 
-        self.request_needed_fragments(routing_node)
+        self.request_needed_data(routing_node)
     }
 
     // When a node in a group receives request to mutate some data it holds, it first sends
@@ -204,9 +161,10 @@ impl DataManager {
 
         log_status!(self);
 
+        let refreshes = fragments.into_iter().map(Refresh::Fragment).collect();
         self.send_refresh(routing_node,
                           Authority::NaeManager(*data_id.name()),
-                          fragments)?;
+                          refreshes)?;
 
         if let Some(group) = routing_node.close_group(*data_id.name(), GROUP_SIZE) {
             for node in &group {
@@ -214,7 +172,7 @@ impl DataManager {
                     .register_needed_data_with_another_holder(&data_id, *node);
             }
 
-            self.request_needed_fragments(routing_node)?;
+            self.request_needed_data(routing_node)?;
         }
 
         Ok(())
@@ -257,7 +215,7 @@ impl DataManager {
             }
         };
 
-        self.request_needed_fragments(routing_node)?;
+        self.request_needed_data(routing_node)?;
 
         if !valid {
             return Ok(());
@@ -291,7 +249,7 @@ impl DataManager {
             return Err(InternalError::InvalidMessage);
         }
 
-        self.request_needed_fragments(routing_node)
+        self.request_needed_data(routing_node)
     }
 
     pub fn handle_put_idata(&mut self,
@@ -329,21 +287,24 @@ impl DataManager {
     pub fn handle_get_mdata(&mut self,
                             routing_node: &mut RoutingNode,
                             src: Authority<XorName>,
-                            dst: Authority<XorName>,
                             name: XorName,
                             tag: u64,
                             msg_id: MessageId)
                             -> Result<(), InternalError> {
         self.update_request_stats(&src);
 
+        /// Send the response as a node, to allow custom accumulation.
+        let resp_src = Authority::ManagedNode(*routing_node.id()?.name());
+        let resp_dst = src;
+
         let res = self.fetch_mdata(name, tag);
         trace!("As {:?} sending GetMData response {:?} of {:?} to {:?}",
-               dst,
+               resp_dst,
                res,
                name,
-               src);
+               resp_src);
         routing_node
-            .send_get_mdata_response(dst, src, res, msg_id)?;
+            .send_get_mdata_response(resp_src, resp_dst, res, msg_id)?;
 
         Ok(())
     }
@@ -351,11 +312,12 @@ impl DataManager {
     pub fn handle_get_mdata_success(&mut self,
                                     routing_node: &mut RoutingNode,
                                     src: XorName,
-                                    data: MutableData)
+                                    data: MutableData,
+                                    msg_id: MessageId)
                                     -> Result<(), InternalError> {
-
-        let _ = self.cache.stop_needed_fragment_request(&src);
-        self.request_needed_fragments(routing_node)?;
+        self.cache
+            .handle_needed_mutable_chunk_success(data.id(), src, msg_id);
+        self.request_needed_data(routing_node)?;
 
         // If we're no longer in the close group, return.
         if !close_to_address(routing_node, data.name()) {
@@ -401,13 +363,12 @@ impl DataManager {
 
     pub fn handle_get_mdata_failure(&mut self,
                                     routing_node: &mut RoutingNode,
-                                    src: XorName)
+                                    src: XorName,
+                                    msg_id: MessageId)
                                     -> Result<(), InternalError> {
-        if self.cache.stop_needed_fragment_request(&src).is_none() {
-            return Err(InternalError::InvalidMessage);
-        }
-
-        self.request_needed_fragments(routing_node)
+        self.cache
+            .handle_needed_mutable_chunk_failure(src, msg_id);
+        self.request_needed_data(routing_node)
     }
 
     pub fn handle_put_mdata(&mut self,
@@ -485,7 +446,7 @@ impl DataManager {
             false
         };
 
-        self.request_needed_fragments(routing_node)?;
+        self.request_needed_data(routing_node)?;
 
         if !valid {
             return Ok(());
@@ -543,7 +504,7 @@ impl DataManager {
             return Err(InternalError::InvalidMessage);
         }
 
-        self.request_needed_fragments(routing_node)
+        self.request_needed_data(routing_node)
     }
 
     pub fn handle_get_mdata_version(&mut self,
@@ -652,7 +613,7 @@ impl DataManager {
             None
         };
 
-        self.request_needed_fragments(routing_node)?;
+        self.request_needed_data(routing_node)?;
 
         let (name, tag, key) = if let Some(info) = info {
             info
@@ -691,7 +652,7 @@ impl DataManager {
             return Err(InternalError::InvalidMessage);
         }
 
-        self.request_needed_fragments(routing_node)
+        self.request_needed_data(routing_node)
     }
 
     #[cfg_attr(feature = "cargo-clippy", allow(too_many_arguments))]
@@ -839,10 +800,10 @@ impl DataManager {
                              routing_table: &RoutingTable<XorName>)
                              -> Result<(), InternalError> {
         if self.cache.prune_needed_fragments(routing_table) {
-            let _ = self.request_needed_fragments(routing_node);
+            let _ = self.request_needed_data(routing_node);
         }
 
-        let mut refresh = Vec::new();
+        let mut refreshes = Vec::new();
         let mut has_pruned_data = false;
 
         for data_id in self.our_chunks() {
@@ -871,14 +832,14 @@ impl DataManager {
                 }
                 Some(close_group) => {
                     if close_group.contains(&node_name) {
-                        refresh.push(FragmentInfo::data(data_id))
+                        refreshes.push(Refresh::from_data_id(data_id));
                     }
                 }
             }
         }
 
-        if !refresh.is_empty() {
-            let _ = self.send_refresh(routing_node, Authority::ManagedNode(*node_name), refresh);
+        if !refreshes.is_empty() {
+            let _ = self.send_refresh(routing_node, Authority::ManagedNode(*node_name), refreshes);
         }
 
         if has_pruned_data {
@@ -902,7 +863,7 @@ impl DataManager {
         }
 
         if self.cache.prune_needed_fragments(routing_table) {
-            self.request_needed_fragments(routing_node)?;
+            self.request_needed_data(routing_node)?;
         }
 
         let mut refreshes = HashMap::default();
@@ -922,7 +883,7 @@ impl DataManager {
                             refreshes
                                 .entry(*outer_node)
                                 .or_insert_with(Vec::new)
-                                .push(FragmentInfo::data(data_id))
+                                .push(Refresh::from_data_id(data_id))
                         }
                     }
                 }
@@ -937,7 +898,7 @@ impl DataManager {
     }
 
     pub fn check_timeouts(&mut self, routing_node: &mut RoutingNode) {
-        let _ = self.request_needed_fragments(routing_node);
+        let _ = self.request_needed_data(routing_node);
     }
 
     fn fetch_mdata(&self, name: XorName, tag: u64) -> Result<MutableData, ClientError> {
@@ -1194,10 +1155,80 @@ impl DataManager {
         }
     }
 
+    fn handle_fragment_refresh(&mut self,
+                               src: XorName,
+                               fragment: FragmentInfo)
+                               -> Result<(), InternalError> {
+        if self.cache
+               .register_needed_fragment_with_another_holder(fragment.clone(), src) {
+            return Ok(());
+        }
+
+        let holders = match self.fragment_refresh_accumulator
+                  .add(fragment.clone(), src)
+                  .cloned() {
+            Some(holders) => {
+                self.fragment_refresh_accumulator.delete(&fragment);
+                holders
+            }
+            None => return Ok(()),
+        };
+
+        let needed = match fragment {
+            FragmentInfo::ImmutableData(name) => !self.chunk_store.has(&ImmutableDataId(name)),
+            FragmentInfo::MutableDataShell { name, tag, version, .. } => {
+                match self.chunk_store.get(&MutableDataId(name, tag)) {
+                    Err(_) => true,
+                    Ok(data) => data.version() < version,
+                }
+            }
+            FragmentInfo::MutableDataEntry {
+                name,
+                tag,
+                ref key,
+                version,
+                ..
+            } => {
+                if let Ok(data) = self.chunk_store.get(&MutableDataId(name, tag)) {
+                    match data.get(key) {
+                        None => true,
+                        Some(value) if value.entry_version < version => true,
+                        Some(_) => false,
+                    }
+                } else {
+                    true
+                }
+            }
+        };
+
+        if needed {
+            for holder in holders {
+                self.cache
+                    .insert_needed_fragment(fragment.clone(), holder);
+            }
+        }
+
+        Ok(())
+    }
+
+    fn handle_chunk_refresh(&mut self,
+                            src: XorName,
+                            data_id: MutableDataId)
+                            -> Result<(), InternalError> {
+        if self.chunk_refresh_accumulator
+               .add(data_id, src)
+               .is_some() {
+            self.chunk_refresh_accumulator.delete(&data_id);
+            self.cache.insert_needed_mutable_chunk(data_id);
+        }
+
+        Ok(())
+    }
+
     fn send_refresh(&self,
                     routing_node: &mut RoutingNode,
                     dst: Authority<XorName>,
-                    refresh: Vec<FragmentInfo>)
+                    refresh: Vec<Refresh>)
                     -> Result<(), InternalError> {
         // FIXME - We need to handle >2MB chunks
         let src = Authority::ManagedNode(*routing_node.id()?.name());
@@ -1226,6 +1257,30 @@ impl DataManager {
                                   Authority::NaeManager(name),
                                   payload,
                                   msg_id)?;
+        Ok(())
+    }
+
+    fn request_needed_data(&mut self, routing_node: &mut RoutingNode) -> Result<(), InternalError> {
+        self.request_needed_chunks(routing_node)?;
+        self.request_needed_fragments(routing_node)?;
+        Ok(())
+    }
+
+    fn request_needed_chunks(&mut self,
+                             routing_node: &mut RoutingNode)
+                             -> Result<(), InternalError> {
+        if let Some(data_id) = self.cache.needed_mutable_chunk() {
+            let MutableDataId(name, tag) = data_id;
+            let src = Authority::ManagedNode(*routing_node.id()?.name());
+            let dst = Authority::NaeManager(name);
+            let msg_id = MessageId::new();
+
+            routing_node
+                .send_get_mdata_request(src, dst, name, tag, msg_id)?;
+            self.cache
+                .start_needed_mutable_chunk_request(data_id, msg_id);
+        }
+
         Ok(())
     }
 
@@ -1262,10 +1317,6 @@ impl DataManager {
                         routing_node
                             .send_get_idata_request(src, dst, name, msg_id)?;
                         break;
-                    }
-                    FragmentInfo::MutableData(name, tag) => {
-                        routing_node
-                            .send_get_mdata_request(src, dst, name, tag, msg_id)?;
                     }
                     FragmentInfo::MutableDataShell { name, tag, .. } => {
                         routing_node
@@ -1365,6 +1416,23 @@ impl Debug for DataManager {
                self.immutable_data_count,
                self.mutable_data_count,
                self.chunk_store.used_space())
+    }
+}
+
+#[derive(Serialize, Deserialize)]
+enum Refresh {
+    Chunk(MutableDataId),
+    Fragment(FragmentInfo),
+}
+
+impl Refresh {
+    fn from_data_id(id: DataId) -> Self {
+        match id {
+            DataId::Immutable(ImmutableDataId(name)) => {
+                Refresh::Fragment(FragmentInfo::ImmutableData(name))
+            }
+            DataId::Mutable(id) => Refresh::Chunk(id),
+        }
     }
 }
 
