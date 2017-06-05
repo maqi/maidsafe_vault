@@ -6,6 +6,8 @@ mod mutation;
 mod tests;
 
 use self::cache::{Cache, FragmentInfo, MutationVote, PendingWrite};
+#[cfg(feature = "use-mock-crust")]
+pub use self::cache::PENDING_WRITE_TIMEOUT_SECS;
 pub use self::data::{Data, DataId, ImmutableDataId, MutableDataId};
 use self::mutable_data_cache::MutableDataCache;
 use self::mutation::{Mutation, MutationType};

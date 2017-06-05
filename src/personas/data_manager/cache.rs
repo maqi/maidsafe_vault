@@ -26,8 +26,12 @@ use std::collections::hash_map::Entry;
 use std::time::Duration;
 use utils::{self, HashMap, HashSet, Instant, SecureHash};
 
+#[cfg(not(feature = "use-mock-crust"))]
 /// The timeout for cached data from requests; if no consensus is reached, the data is dropped.
 const PENDING_WRITE_TIMEOUT_SECS: u64 = 60;
+#[cfg(feature = "use-mock-crust")]
+/// The timeout for cached data from requests; if no consensus is reached, the data is dropped.
+pub const PENDING_WRITE_TIMEOUT_SECS: u64 = 60;
 /// The timeout for retrieving mutable data chunks.
 const MUTABLE_CHUNK_REQUEST_TIMEOUT_SECS: u64 = 60;
 /// The timeout for retrieving data fragments from individual peers.
