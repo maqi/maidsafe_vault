@@ -25,10 +25,10 @@ use maidsafe_utilities::serialisation;
 pub use mock_routing::Node as RoutingNode;
 #[cfg(all(test, feature = "use-mock-routing"))]
 use mock_routing::NodeBuilder;
+use personas::data_manager::{self, DataManager};
 #[cfg(feature = "use-mock-crust")]
 use personas::data_manager::DataId;
-use personas::data_manager::DataManager;
-use personas::maid_manager::MaidManager;
+use personas::maid_manager::{self, MaidManager};
 use routing::{Authority, EventStream, Request, Response, RoutingTable, XorName};
 pub use routing::Event;
 #[cfg(not(all(test, feature = "use-mock-routing")))]
@@ -179,16 +179,13 @@ impl Vault {
              Authority::ManagedNode(_),
              Request::Refresh(serialised_msg, msg_id)) => {
                 match serialisation::deserialise::<Refresh>(&serialised_msg)? {
-                    Refresh::MaidManager(serialised_refresh) => {
+                    Refresh::MaidManager(refresh) => {
                         self.maid_manager
-                            .handle_serialised_refresh(&mut self.routing_node,
-                                                       &serialised_refresh,
-                                                       msg_id,
-                                                       Some(src_name))
+                            .handle_refresh(&mut self.routing_node, refresh, msg_id, Some(src_name))
                     }
-                    Refresh::DataManager(serialised_refresh) => {
+                    Refresh::DataManager(refreshes) => {
                         self.data_manager
-                            .handle_refresh(&mut self.routing_node, src_name, &serialised_refresh)
+                            .handle_refreshes(&mut self.routing_node, src_name, refreshes)
                     }
                 }
             }
@@ -196,7 +193,7 @@ impl Vault {
              Authority::NaeManager(_),
              Request::Refresh(serialised_msg, _)) => {
                 self.data_manager
-                    .handle_refresh(&mut self.routing_node, src_name, &serialised_msg)
+                    .handle_serialised_refresh(&mut self.routing_node, src_name, &serialised_msg)
             }
             (Authority::NaeManager(_),
              Authority::NaeManager(_),
@@ -782,6 +779,6 @@ enum EventResult {
 
 #[derive(Deserialize, Serialize, PartialEq, Eq, Debug, Clone)]
 pub enum Refresh {
-    MaidManager(Vec<u8>),
-    DataManager(Vec<u8>),
+    MaidManager(maid_manager::Refresh),
+    DataManager(Vec<data_manager::Refresh>),
 }

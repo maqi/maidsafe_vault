@@ -106,12 +106,20 @@ impl DataManager {
     //
     // Note: refresh is a message whose source is individual node, so its accumulation
     // must be performed manually.
-    pub fn handle_refresh(&mut self,
-                          routing_node: &mut RoutingNode,
-                          src: XorName,
-                          serialised_refresh: &[u8])
-                          -> Result<(), InternalError> {
+    pub fn handle_serialised_refresh(&mut self,
+                                     routing_node: &mut RoutingNode,
+                                     src: XorName,
+                                     serialised_refresh: &[u8])
+                                     -> Result<(), InternalError> {
         let refreshes: Vec<Refresh> = serialisation::deserialise(serialised_refresh)?;
+        self.handle_refreshes(routing_node, src, refreshes)
+    }
+
+    pub fn handle_refreshes(&mut self,
+                            routing_node: &mut RoutingNode,
+                            src: XorName,
+                            refreshes: Vec<Refresh>)
+                            -> Result<(), InternalError> {
         for refresh in refreshes {
             match refresh {
                 Refresh::Chunk(data_id) => self.handle_chunk_refresh(src, data_id),
@@ -1230,15 +1238,14 @@ impl DataManager {
     fn send_refresh(&self,
                     routing_node: &mut RoutingNode,
                     dst: Authority<XorName>,
-                    refresh: Vec<Refresh>)
+                    refreshes: Vec<Refresh>)
                     -> Result<(), InternalError> {
         // FIXME - We need to handle >2MB chunks
         let src = Authority::ManagedNode(*routing_node.id()?.name());
-        let serialised_refresh = serialisation::serialise(&refresh)?;
         let payload = if dst.is_single() {
-            serialisation::serialise(&VaultRefresh::DataManager(serialised_refresh))?
+            serialisation::serialise(&VaultRefresh::DataManager(refreshes))?
         } else {
-            serialised_refresh
+            serialisation::serialise(&refreshes)?
         };
         trace!("DM sending refresh to {:?}.", dst);
         routing_node
@@ -1421,8 +1428,8 @@ impl Debug for DataManager {
     }
 }
 
-#[derive(Serialize, Deserialize)]
-enum Refresh {
+#[derive(Deserialize, Serialize, PartialEq, Eq, Debug, Clone)]
+pub enum Refresh {
     Chunk(MutableDataId),
     Fragment(FragmentInfo),
 }

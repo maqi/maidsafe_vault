@@ -312,8 +312,7 @@ fn handle_node_added() {
 
     let payload = assert_match!(message.request, Request::Refresh(payload, _) => payload);
     let refreshes: VaultRefresh = unwrap!(deserialise(&payload));
-    let refreshes = assert_match!(refreshes, VaultRefresh::DataManager(refresh) => refresh);
-    let refreshes: Vec<Refresh> = unwrap!(deserialise(&refreshes));
+    let refreshes = assert_match!(refreshes, VaultRefresh::DataManager(refreshes) => refreshes);
 
     assert_eq!(refreshes.len(), 2);
 
@@ -362,13 +361,13 @@ fn idata_with_churn() {
 
     // New node receives the refresh message from one of the old nodes. The message
     // should not accumulate yet.
-    unwrap!(new_dm.handle_refresh(&mut new_node, old_node_names[0], &refresh_payload));
+    unwrap!(new_dm.handle_serialised_refresh(&mut new_node, old_node_names[0], &refresh_payload));
     assert!(new_node.sent_requests.is_empty());
 
     // New node receives the refresh from at least QUORUM other nodes. The message
     // should now accumulate.
     for name in old_node_names.iter().skip(1).take(QUORUM - 1) {
-        unwrap!(new_dm.handle_refresh(&mut new_node, *name, &refresh_payload));
+        unwrap!(new_dm.handle_serialised_refresh(&mut new_node, *name, &refresh_payload));
     }
 
     // Helper function to verify the node sent the get request for a data with
@@ -733,7 +732,7 @@ fn setup_mdata_refresh<R: Rng>(data: &MutableData,
     let refresh = unwrap!(serialise(&refresh));
 
     for name in &other_node_names {
-        unwrap!(new_dm.handle_refresh(&mut new_node, *name, &refresh));
+        unwrap!(new_dm.handle_serialised_refresh(&mut new_node, *name, &refresh));
     }
 
     (new_node, new_dm, other_node_names)

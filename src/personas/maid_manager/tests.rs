@@ -673,7 +673,7 @@ fn account_replication_during_churn() {
     // Simulate the node to node refresh of data part.
     let mut msg_id_list = BTreeSet::new();
     let _ = msg_id_list.insert(op_msg_id);
-    let refresh_data_ops = Refresh::Update {
+    let refresh_data_ops = Refresh::UpdateDataOps {
         name: client_manager.name(),
         msg_ids: msg_id_list,
     };
@@ -799,10 +799,10 @@ fn refresh_data_ops_count() {
     let message = unwrap!(node.sent_requests.remove(&msg_id));
     let refresh = assert_match!(message.request, Request::Refresh(payload, ..) => payload);
     let refresh: Refresh = unwrap!(deserialise(&refresh));
-    let account_name = assert_match!(refresh, Refresh::UpdateData(name) => name);
+    let account_name = assert_match!(refresh, Refresh::InsertDataOp(name) => name);
 
     // Simulate receiving the refresh.
-    let refresh_in = Refresh::UpdateData(account_name);
+    let refresh_in = Refresh::InsertDataOp(account_name);
     let serialised_refresh_in = unwrap!(serialise(&refresh_in));
 
     unwrap!(mm.handle_serialised_refresh(&mut node, &serialised_refresh_in, msg_id, None));
@@ -860,10 +860,10 @@ fn simulate_refresh(node: &mut RoutingNode,
         let refresh: VaultRefresh = unwrap!(deserialise(&refresh));
         let refresh = assert_match!(refresh, VaultRefresh::MaidManager(refresh) => refresh);
         for _ in 0..count {
-            unwrap!(mm.handle_serialised_refresh(node,
-                                                 &refresh,
-                                                 msg_id,
-                                                 Some(XorName(rand::random()))));
+            unwrap!(mm.handle_refresh(node,
+                                      refresh.clone(),
+                                      msg_id,
+                                      Some(XorName(rand::random()))));
         }
     } else {
         unwrap!(mm.handle_serialised_refresh(node, &refresh, msg_id, None));

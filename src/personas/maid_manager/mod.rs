@@ -66,26 +66,26 @@ impl MaidManager {
         self.handle_refresh(routing_node, refresh, msg_id, src_name)
     }
 
-    fn handle_refresh(&mut self,
-                      routing_node: &mut RoutingNode,
-                      refresh: Refresh,
-                      msg_id: MessageId,
-                      src_name: Option<XorName>)
-                      -> Result<(), InternalError> {
+    pub fn handle_refresh(&mut self,
+                          routing_node: &mut RoutingNode,
+                          refresh: Refresh,
+                          msg_id: MessageId,
+                          src_name: Option<XorName>)
+                          -> Result<(), InternalError> {
         // `Refresh::Update` need to be accumulated using a custom algorithm, as `src` is a single
         // node. The other variants don't need custom accumulation, so `src` is a group.
 
         match refresh {
-            Refresh::Update { name, msg_ids } => {
-                self.handle_refresh_update(routing_node, unwrap!(src_name), name, msg_ids)
+            Refresh::UpdateDataOps { name, msg_ids } => {
+                self.handle_refresh_update_data_ops(routing_node, unwrap!(src_name), name, msg_ids)
             }
             Refresh::UpdateKeys {
                 name,
                 ops_count,
                 keys,
             } => self.handle_refresh_update_keys(routing_node, name, ops_count, keys),
-            Refresh::UpdateData(name) => {
-                self.handle_refresh_update_data(routing_node, name, msg_id)
+            Refresh::InsertDataOp(name) => {
+                self.handle_refresh_insert_data_op(routing_node, name, msg_id)
             }
             Refresh::Delete(name) => self.handle_refresh_delete(name),
         }
@@ -712,7 +712,7 @@ impl MaidManager {
             self.send_refresh(routing_node,
                               req.dst,
                               req.dst,
-                              Refresh::UpdateData(utils::client_name(&req.dst)),
+                              Refresh::InsertDataOp(utils::client_name(&req.dst)),
                               msg_id)?;
         }
         Ok(req)
@@ -725,11 +725,10 @@ impl MaidManager {
                     refresh: Refresh,
                     msg_id: MessageId)
                     -> Result<(), InternalError> {
-        let serialised_refresh = serialisation::serialise(&refresh)?;
         let payload = if src.is_single() && dst.is_single() {
-            serialisation::serialise(&VaultRefresh::MaidManager(serialised_refresh))?
+            serialisation::serialise(&VaultRefresh::MaidManager(refresh))?
         } else {
-            serialised_refresh
+            serialisation::serialise(&refresh)?
         };
         routing_node
             .send_refresh_request(src, dst, payload, msg_id)?;
@@ -752,7 +751,7 @@ impl MaidManager {
                               node_src,
                               dst,
                               Refresh::update_data_ops(&account_name, &account),
-                              msg_id)?;
+                              MessageId::new())?;
             self.send_refresh(routing_node,
                               Authority::ClientManager(account_name),
                               dst,
@@ -764,11 +763,11 @@ impl MaidManager {
     }
 
     // `src` is a node - use custom accumulation.
-    fn handle_refresh_update(&mut self,
-                             routing_node: &mut RoutingNode,
-                             sender: XorName,
-                             account_name: XorName,
-                             data_ops_msg_ids: BTreeSet<MessageId>) {
+    fn handle_refresh_update_data_ops(&mut self,
+                                      routing_node: &mut RoutingNode,
+                                      sender: XorName,
+                                      account_name: XorName,
+                                      data_ops_msg_ids: BTreeSet<MessageId>) {
         for msg_id in data_ops_msg_ids {
             if let Some((_, msg_id)) =
                 self.data_ops_msg_id_accumulator
@@ -781,10 +780,10 @@ impl MaidManager {
     }
 
     // `src` is a group - already accumulated.
-    fn handle_refresh_update_data(&mut self,
-                                  routing_node: &RoutingNode,
-                                  account_name: XorName,
-                                  msg_id: MessageId) {
+    fn handle_refresh_insert_data_op(&mut self,
+                                     routing_node: &RoutingNode,
+                                     account_name: XorName,
+                                     msg_id: MessageId) {
         if let Some(account) = self.fetch_account(routing_node, account_name) {
             let _ = account.data_ops_msg_ids.insert(msg_id);
         }
@@ -864,8 +863,8 @@ impl MaidManager {
 }
 
 #[derive(Deserialize, Serialize, PartialEq, Eq, Debug, Clone)]
-enum Refresh {
-    Update {
+pub enum Refresh {
+    UpdateDataOps {
         name: XorName,
         msg_ids: BTreeSet<MessageId>,
     },
@@ -874,13 +873,13 @@ enum Refresh {
         ops_count: u64,
         keys: BTreeSet<sign::PublicKey>,
     },
-    UpdateData(XorName),
+    InsertDataOp(XorName),
     Delete(XorName),
 }
 
 impl Refresh {
     fn update_data_ops(name: &XorName, account: &Account) -> Self {
-        Refresh::Update {
+        Refresh::UpdateDataOps {
             name: *name,
             msg_ids: account.data_ops_msg_ids.clone(),
         }
