@@ -114,7 +114,7 @@ impl Cache {
     }
 
     /// Register successful response to a needed mutable chunk request. If we receive
-    /// responses from at least QUORUM nodes, the request is considered to be successfuly
+    /// responses from at least `QUORUM` nodes, the request is considered to be successfully
     /// finished.
     pub fn handle_needed_mutable_chunk_success(&mut self,
                                                data_id: MutableDataId,
@@ -170,7 +170,7 @@ impl Cache {
 
                 if self.fragment_index
                        .get(fragment)
-                       .map_or(false, |state| state.is_requested()) {
+                       .map_or(false, FragmentState::is_requested) {
                     continue;
                 }
 
@@ -784,6 +784,7 @@ impl ChunkRequest {
     }
 
     fn can_accumulate(&self) -> bool {
+        // `GROUP_SIZE - 1` means everyone in the group except us.
         GROUP_SIZE - 1 - self.failures.len() >= QUORUM
     }
 
@@ -948,7 +949,7 @@ mod tests {
         assert!(cache.fragment_index.is_empty());
 
         // Start multiple requests, then stop them. Assert that the needed fragment
-        // data strucutres remains empty afterwards.
+        // data structure remains empty afterwards.
         cache.insert_needed_fragment(fragment.clone(), holder0);
         cache.start_needed_fragment_request(&fragment, &holder0);
 
