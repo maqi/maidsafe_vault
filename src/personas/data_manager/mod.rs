@@ -309,10 +309,10 @@ impl DataManager {
 
         let res = self.fetch_mdata(name, tag);
         trace!("As {:?} sending GetMData response {:?} of {:?} to {:?}",
-               resp_dst,
+               resp_src,
                res,
                name,
-               resp_src);
+               resp_dst);
         routing_node
             .send_get_mdata_response(resp_src, resp_dst, res, msg_id)?;
 
@@ -1202,8 +1202,7 @@ impl DataManager {
                 if let Ok(data) = self.chunk_store.get(&MutableDataId(name, tag)) {
                     match data.get(key) {
                         None => true,
-                        Some(value) if value.entry_version < version => true,
-                        Some(_) => false,
+                        Some(value) => value.entry_version < version,
                     }
                 } else {
                     true

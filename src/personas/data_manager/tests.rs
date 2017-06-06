@@ -750,6 +750,7 @@ fn take_get_mdata_request(node: &mut RoutingNode) -> (MessageId, MutableDataId) 
     (msg_id, MutableDataId(name, tag))
 }
 
+// Removes and returns the sent request matching the given predicate.
 fn take_request<F>(node: &mut RoutingNode, mut f: F) -> (MessageId, RequestWrapper)
     where F: FnMut(&RequestWrapper) -> bool
 {
