@@ -30,6 +30,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::iter;
 use std::sync::mpsc::TryRecvError;
 
+// Same as in safe_core: value between one second and certain amount of milliseconds to allow the
+// charge of a get request or a put request to be leaked.
 const RETRY_DELAY_MS: u64 = 800;
 
 macro_rules! assert_recv_response {
