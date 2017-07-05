@@ -142,6 +142,15 @@ impl DataManager {
                                 routing_node: &mut RoutingNode,
                                 serialised_refresh: &[u8])
                                 -> Result<(), InternalError> {
+        #[cfg(all(test, feature = "use-mock-crust"))]
+        {
+            use maidsafe_utilities::SeededRng;
+            use rand::Rng;
+            if SeededRng::thread_rng().gen_range(0, 10) == 5 {
+                return Ok(());
+            }
+        }
+
         let MutationVote { data_id, hash } = serialisation::deserialise(serialised_refresh)?;
         let write = match self.cache.take_pending_write(&data_id, &hash) {
             Some(write) => write,

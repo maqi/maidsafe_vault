@@ -834,11 +834,11 @@ fn mutable_data_concurrent_mutations() {
     verify_data_is_stored(&mut nodes, &mut client, &all_data);
 }
 
-// Concurrently put and mutate a mutable data.
-// Verify the data is consistently stored (it may or might not be mutated, depending
-// on the order in which the request are processed by the nodes).
+// Put a mutable data then immediately mutate it.
+// This test was used to expose an issue that a mutate request conflicts with a `PutMData` entry in
+// the pending_writes of DM's ache.
 #[test]
-fn mutable_data_concurrent_put_and_mutate() {
+fn mutable_data_put_and_mutate() {
     let seed = None;
     let node_count = TEST_NET_SIZE;
     let iterations = test_utils::iterations();
@@ -877,9 +877,6 @@ fn mutable_data_concurrent_put_and_mutate() {
         unwrap!(data.set_user_permissions(User::Anyone, permissions, 1, client_key0));
         let _ = clients[0].put_mdata(data.clone());
 
-        let actions = test_utils::gen_mutable_data_entry_actions(&data, 1, &mut rng);
-        let _ = clients[1].mutate_mdata_entries(*data.name(), data.tag(), actions.clone());
-
         event_count += poll::nodes_and_clients(&mut nodes, &mut clients);
         trace!("Processed {} events.", event_count);
 
@@ -890,12 +887,18 @@ fn mutable_data_concurrent_put_and_mutate() {
                        clients[0].name(),
                        res);
                 if res.is_ok() {
-                    let _ = all_data.insert(data_name, data);
+                    let _ = all_data.insert(data_name, data.clone());
                 }
 
                 break;
             }
         }
+
+        let actions = test_utils::gen_mutable_data_entry_actions(&data, 1, &mut rng);
+        let _ = clients[1].mutate_mdata_entries(*data.name(), data.tag(), actions.clone());
+
+        event_count += poll::nodes_and_clients(&mut nodes, &mut clients);
+        trace!("Processed {} events.", event_count);
 
         // Try to receive response for the MutateMDataEntries request.
         while let Ok(event) = clients[1].try_recv() {
