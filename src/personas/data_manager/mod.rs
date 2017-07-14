@@ -80,6 +80,11 @@ pub struct DataManager {
     mutable_data_count: u64,
     client_get_requests: u64,
     logging_time: Instant,
+    // This is only used in tests to indicate whether to delay the group refresh messages.
+    _is_delaying_group_refresh: bool,
+    // This is only used in tests as a place to temporarily hold incoming group refresh messages in
+    // order to delay handling them.
+    _delayed_group_refresh_cache: BTreeSet<Vec<u8>>,
 }
 
 impl DataManager {
@@ -98,6 +103,11 @@ impl DataManager {
                mutable_data_count: 0,
                client_get_requests: 0,
                logging_time: Instant::now(),
+               // TODO: Once https://github.com/rust-lang/rust/issues/41681 is in stable we can
+               // initialise the following two fields under #[cfg(feature = "use-mock-crust")] and
+               // exclude the member variables from the struct for production builds altogether.
+               _is_delaying_group_refresh: false,
+               _delayed_group_refresh_cache: BTreeSet::new(),
            })
     }
 
@@ -140,9 +150,17 @@ impl DataManager {
     // performed automatically by routing.
     pub fn handle_group_refresh(&mut self,
                                 routing_node: &mut RoutingNode,
-                                serialised_refresh: &[u8])
+                                serialised_refresh: Vec<u8>)
                                 -> Result<(), InternalError> {
-        let MutationVote { data_id, hash } = serialisation::deserialise(serialised_refresh)?;
+        #[cfg(feature = "use-mock-crust")]
+        // If this returns `None` then the message has been cached for handling later to simulate a
+        // network delay.
+        let serialised_refresh = match self.handle_delayed_group_refresh(serialised_refresh) {
+            Some(serialised_refresh) => serialised_refresh,
+            None => return Ok(()),
+        };
+
+        let MutationVote { data_id, hash } = serialisation::deserialise(&serialised_refresh)?;
         let write = match self.cache.take_pending_write(&data_id, &hash) {
             Some(write) => write,
             None => return Ok(()),
@@ -1390,6 +1408,42 @@ impl DataManager {
         }
 
         Ok(result)
+    }
+
+    pub fn delay_group_refreshes(&mut self, delayed: bool) {
+        self._is_delaying_group_refresh = delayed;
+    }
+
+    // If `serialised_refresh` has not been previously handled here, it is added to the cache for
+    // later and the function returns `None`.  If it has been seen before, it is popped from the
+    // cache and returned.
+    fn handle_delayed_group_refresh(&mut self, serialised_refresh: Vec<u8>) -> Option<Vec<u8>> {
+        if !self._delayed_group_refresh_cache
+                .remove(&serialised_refresh) && self._is_delaying_group_refresh {
+            let _ = self._delayed_group_refresh_cache
+                .insert(serialised_refresh);
+            return None;
+        }
+        Some(serialised_refresh)
+    }
+
+    // In real network, the group_refresh is sent in the highest priority and shall not be dropped.
+    // However, it may get severely delayed for particular node, hence being processed out-of-order.
+    pub fn pop_group_refresh(&mut self, routing_node: &mut RoutingNode) {
+        use itertools::Itertools;
+        use maidsafe_utilities::SeededRng;
+        use rand::Rng;
+
+        let mut rng = SeededRng::thread_rng();
+        if rng.gen_weighted_bool(10) {
+            let _ =
+                rng.choose(&self._delayed_group_refresh_cache.iter().collect_vec())
+                    .cloned()
+                    .cloned()
+                    .map(|delayed_refresh| {
+                             self.handle_group_refresh(routing_node, delayed_refresh)
+                         });
+        }
     }
 
     fn get_version(&self, data_id: &DataId) -> Result<u64, ChunkStoreError> {

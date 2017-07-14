@@ -122,6 +122,11 @@ impl TestNode {
     pub fn routing_table(&self) -> &RoutingTable<XorName> {
         self.vault.routing_table()
     }
+
+    /// Set whether `DataManager` group refreshes should be delayed or not on this vault.
+    pub fn delay_group_refreshes(&mut self, delayed: bool) {
+        self.vault.delay_group_refreshes(delayed)
+    }
 }
 
 impl Drop for TestNode {
