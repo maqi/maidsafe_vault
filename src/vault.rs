@@ -39,6 +39,7 @@ use routing::NodeBuilder;
 #[cfg(not(feature = "use-mock-crust"))]
 use rust_sodium;
 use rust_sodium::crypto::sign;
+use std::env;
 use std::path::Path;
 use tempdir::TempDir;
 
@@ -97,13 +98,23 @@ impl Vault {
         #[cfg(not(feature = "use-mock-crust"))]
         rust_sodium::init();
 
-        let (tmp_dir, chunk_store_root) = match config.chunk_store_root {
-            Some(path_str) => (None, Path::new(&path_str).to_path_buf()),
-            None => {
-                let tmp_dir = TempDir::new(CHUNK_STORE_DIR)?;
-                let path_buf = tmp_dir.path().to_path_buf();
-                (Some(tmp_dir), path_buf)
-            }
+        let deny_other_local_nodes =
+            config
+                .dev
+                .as_ref()
+                .map_or(true, |dev_config| !dev_config.allow_multiple_lan_nodes);
+
+        let (tmp_dir, chunk_store_root) = if deny_other_local_nodes {
+            let mut chunk_store_root = match config.chunk_store_root {
+                Some(path_str) => Path::new(&path_str).to_path_buf(),
+                None => env::temp_dir(),
+            };
+            chunk_store_root.push(CHUNK_STORE_DIR);
+            (None, chunk_store_root)
+        } else {
+            let tmp_dir = TempDir::new(CHUNK_STORE_DIR)?;
+            let path_buf = tmp_dir.path().to_path_buf();
+            (Some(tmp_dir), path_buf)
         };
 
         let routing_node = if use_cache {
