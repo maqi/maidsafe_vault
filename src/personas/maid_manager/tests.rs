@@ -17,6 +17,7 @@
 
 use super::*;
 use super::account::DEFAULT_MAX_OPS_COUNT;
+use {GROUP_SIZE, QUORUM};
 use maidsafe_utilities::serialisation::{deserialise, serialise};
 use rand;
 use routing::{AccountInfo, MAX_IMMUTABLE_DATA_SIZE_IN_BYTES, MAX_MUTABLE_DATA_ENTRIES,
@@ -644,12 +645,14 @@ fn account_replication_during_churn() {
 
     let mut old_node = RoutingNode::new();
     let mut old_mm = MaidManager::new(None);
+    old_mm.set_group_size(GROUP_SIZE);
 
     let op_msg_id = create_account(&mut old_node, &mut old_mm, client, client_manager);
     let old_info = unwrap!(get_account_info(&mut old_node, &mut old_mm, client, client_manager));
 
     let mut new_node = RoutingNode::new();
     let mut new_mm = MaidManager::new(None);
+    new_mm.set_group_size(GROUP_SIZE);
     let new_node_name = *unwrap!(new_node.id()).name();
 
     // The new node doesn't have the account initially.

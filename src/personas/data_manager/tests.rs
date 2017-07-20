@@ -16,7 +16,7 @@
 // relating to use of the SAFE Network Software.
 
 use super::*;
-use QUORUM;
+use {GROUP_SIZE, QUORUM};
 use maidsafe_utilities::SeededRng;
 use maidsafe_utilities::serialisation::{deserialise, serialise};
 use mock_routing::RequestWrapper;
@@ -821,7 +821,9 @@ fn create_data_manager() -> DataManager {
     let suffix: u64 = rand::random();
     let dir = format!("{}_{}", CHUNK_STORE_DIR, suffix);
 
-    unwrap!(DataManager::new(env::temp_dir().join(dir), CHUNK_STORE_CAPACITY))
+    let mut dm = unwrap!(DataManager::new(env::temp_dir().join(dir), CHUNK_STORE_CAPACITY));
+    dm.set_group_size(GROUP_SIZE);
+    dm
 }
 
 // Create and setup all the objects necessary for churn-related tests.

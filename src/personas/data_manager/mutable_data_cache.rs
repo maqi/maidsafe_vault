@@ -17,7 +17,6 @@
 
 use super::ACCUMULATOR_TIMEOUT_SECS;
 use super::data::{Data, MutableDataId};
-use QUORUM;
 use accumulator::Accumulator;
 use routing::{MutableData, Value, XorName};
 use std::time::Duration;
@@ -37,10 +36,15 @@ impl MutableDataCache {
         let duration = Duration::from_secs(ACCUMULATOR_TIMEOUT_SECS);
 
         MutableDataCache {
-            shell_accumulator: Accumulator::with_duration(QUORUM, duration),
-            entry_accumulator: Accumulator::with_duration(QUORUM, duration),
+            shell_accumulator: Accumulator::with_duration(1, duration),
+            entry_accumulator: Accumulator::with_duration(1, duration),
             entry_cache: Default::default(),
         }
+    }
+
+    pub fn set_quorum(&mut self, quorum: usize) {
+        self.shell_accumulator.set_quorum(quorum);
+        self.entry_accumulator.set_quorum(quorum);
     }
 
     /// Accumulates mutable data. Returns the shell and entries that reached the

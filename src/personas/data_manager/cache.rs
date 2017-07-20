@@ -18,8 +18,6 @@
 use super::STATUS_LOG_INTERVAL;
 use super::data::{DataId, ImmutableDataId, MutableDataId};
 use super::mutation::{self, Mutation};
-use GROUP_SIZE;
-use QUORUM;
 use maidsafe_utilities::serialisation::serialised_size;
 use routing::{Authority, MAX_MUTABLE_DATA_ENTRIES, MAX_MUTABLE_DATA_SIZE_IN_BYTES, MessageId,
               MutableData, RoutingTable, Value, XorName};
@@ -64,6 +62,7 @@ pub struct Cache {
     total_needed_fragments_count: usize,
     requested_needed_fragments_count: usize,
     logging_time: Instant,
+    group_size: usize,
 }
 
 impl Cache {
@@ -123,12 +122,13 @@ impl Cache {
                                                data_id: MutableDataId,
                                                src: XorName,
                                                msg_id: MessageId) {
+        let group_size = self.group_size;
         let done = self.needed_mutable_chunk_request
             .as_mut()
             .map_or(false,
                     |request| if request.data_id == data_id && request.msg_id == msg_id {
                         let _ = request.successes.insert(src);
-                        request.did_accumulate()
+                        request.did_accumulate(group_size)
                     } else {
                         false
                     });
@@ -139,11 +139,12 @@ impl Cache {
     }
 
     pub fn handle_needed_mutable_chunk_failure(&mut self, src: XorName, msg_id: MessageId) {
+        let group_size = self.group_size;
         let done = self.needed_mutable_chunk_request
             .as_mut()
             .map_or(false, |request| if request.msg_id == msg_id {
                 let _ = request.failures.insert(src);
-                !request.can_accumulate()
+                !request.can_accumulate(group_size)
             } else {
                 false
             });
@@ -287,6 +288,7 @@ impl Cache {
     pub fn prune_needed_fragments(&mut self, routing_table: &RoutingTable<XorName>) -> bool {
         let mut lost_holders = Vec::new();
         let mut result = false;
+        let group_size = self.group_size;
 
         for (holder_name, holder) in &mut self.fragment_holders {
             let (lost, retained) = holder
@@ -294,7 +296,7 @@ impl Cache {
                 .drain()
                 .partition(|fragment| {
                                routing_table
-                                   .other_closest_names(fragment.name(), GROUP_SIZE)
+                                   .other_closest_names(fragment.name(), group_size)
                                    .map_or(true, |group| !group.contains(&holder_name))
                            });
 
@@ -353,9 +355,10 @@ impl Cache {
 
     pub fn prune_unneeded_chunks(&mut self, routing_table: &RoutingTable<XorName>) -> u64 {
         let before = self.unneeded_immutable_chunks.len();
+        let group_size = self.group_size;
 
         self.unneeded_immutable_chunks
-            .retain(|name| !routing_table.is_closest(name, GROUP_SIZE));
+            .retain(|name| !routing_table.is_closest(name, group_size));
 
         (before - self.unneeded_immutable_chunks.len()) as u64
     }
@@ -542,6 +545,10 @@ impl Cache {
         }
     }
 
+    pub fn set_group_size(&mut self, group_size: usize) {
+        self.group_size = group_size;
+    }
+
     fn stop_expired_needed_mutable_chunk_request(&mut self) {
         if self.needed_mutable_chunk_request
                .as_ref()
@@ -596,6 +603,7 @@ impl Default for Cache {
             logging_time: Instant::now(),
             total_needed_fragments_count: 0,
             requested_needed_fragments_count: 0,
+            group_size: 1,
         }
     }
 }
@@ -833,13 +841,15 @@ impl ChunkRequest {
         self.timestamp.elapsed().as_secs() > MUTABLE_CHUNK_REQUEST_TIMEOUT_SECS
     }
 
-    fn can_accumulate(&self) -> bool {
+    fn can_accumulate(&self, group_size: usize) -> bool {
         // `GROUP_SIZE - 1` means everyone in the group except us.
-        GROUP_SIZE - 1 - self.failures.len() >= QUORUM
+        let quorum = group_size / 2 + 1;
+        group_size - 1 - self.failures.len() >= quorum
     }
 
-    fn did_accumulate(&self) -> bool {
-        self.successes.len() >= QUORUM
+    fn did_accumulate(&self, group_size: usize) -> bool {
+        let quorum = group_size / 2 + 1;
+        self.successes.len() >= quorum
     }
 }
 

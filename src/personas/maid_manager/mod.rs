@@ -24,7 +24,6 @@ use self::account::Account;
 pub use self::account::DEFAULT_MAX_OPS_COUNT;
 use self::message_id_accumulator::MessageIdAccumulator;
 use GROUP_SIZE;
-use QUORUM;
 use TYPE_TAG_INVITE;
 use authority::{ClientAuthority, ClientManagerAuthority};
 use error::InternalError;
@@ -67,13 +66,18 @@ impl MaidManager {
         MaidManager {
             accounts: HashMap::default(),
             data_ops_msg_id_accumulator:
-                MessageIdAccumulator::new(QUORUM, Duration::from_secs(ACCUMULATOR_TIMEOUT_SECS)),
+                MessageIdAccumulator::new(1, Duration::from_secs(ACCUMULATOR_TIMEOUT_SECS)),
             request_cache: HashMap::default(),
             invite_key: invite_key,
             account_creation_cache: LruCache::with_expiry_duration_and_capacity(
                 Duration::from_secs(ACCOUNT_CREATION_TIMEOUT_SECS),
                 ACCOUNT_CREATION_LIMIT),
         }
+    }
+
+    pub fn set_group_size(&mut self, group_size: usize) {
+        let quorum = group_size / 2 + 1;
+        self.data_ops_msg_id_accumulator.set_quorum(quorum);
     }
 
     pub fn handle_serialised_refresh(&mut self,

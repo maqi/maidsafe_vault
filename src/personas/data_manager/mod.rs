@@ -12,7 +12,6 @@ pub use self::data::{Data, DataId, ImmutableDataId, MutableDataId};
 use self::mutable_data_cache::MutableDataCache;
 use self::mutation::{Mutation, MutationType};
 use GROUP_SIZE;
-use QUORUM;
 use accumulator::Accumulator;
 use authority::ClientManagerAuthority;
 use chunk_store::{Chunk, ChunkId, ChunkStore};
@@ -89,9 +88,8 @@ impl DataManager {
 
         Ok(DataManager {
                chunk_store: chunk_store,
-               chunk_refresh_accumulator: Accumulator::with_duration(QUORUM, accumulator_duration),
-               fragment_refresh_accumulator: Accumulator::with_duration(QUORUM,
-                                                                        accumulator_duration),
+               chunk_refresh_accumulator: Accumulator::with_duration(1, accumulator_duration),
+               fragment_refresh_accumulator: Accumulator::with_duration(1, accumulator_duration),
                cache: Default::default(),
                mdata_cache: MutableDataCache::new(),
                immutable_data_count: 0,
@@ -99,6 +97,14 @@ impl DataManager {
                client_get_requests: 0,
                logging_time: Instant::now(),
            })
+    }
+
+    pub fn set_group_size(&mut self, group_size: usize) {
+        self.cache.set_group_size(group_size);
+        let quorum = group_size / 2 + 1;
+        self.chunk_refresh_accumulator.set_quorum(quorum);
+        self.fragment_refresh_accumulator.set_quorum(quorum);
+        self.mdata_cache.set_quorum(quorum);
     }
 
     // When a new node joins a group, the other members of the group send it "refresh"

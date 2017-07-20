@@ -35,6 +35,10 @@ impl<K> MessageIdAccumulator<K>
         }
     }
 
+    pub fn set_quorum(&mut self, quorum: usize) {
+        self.quorum = quorum;
+    }
+
     pub fn add(&mut self, key: K, src_name: XorName) -> Option<K> {
         let done = {
             let src_list = self.map

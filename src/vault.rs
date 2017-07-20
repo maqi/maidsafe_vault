@@ -15,6 +15,7 @@
 // Please review the Licences for the specific language governing permissions and limitations
 // relating to use of the SAFE Network Software.
 
+use GROUP_SIZE;
 use authority::{ClientAuthority, ClientManagerAuthority};
 use cache::Cache;
 #[cfg(feature = "use-mock-crust")]
@@ -39,6 +40,7 @@ use routing::NodeBuilder;
 #[cfg(not(feature = "use-mock-crust"))]
 use rust_sodium;
 use rust_sodium::crypto::sign;
+use std::cmp;
 use std::env;
 use std::path::Path;
 use tempdir::TempDir;
@@ -153,6 +155,7 @@ impl Vault {
             Event::Request { request, src, dst } => self.on_request(request, src, dst),
             Event::Response { response, src, dst } => self.on_response(response, src, dst),
             Event::NodeAdded(node_added, routing_table) => {
+                self.set_group_size(routing_table.our_section().len());
                 self.on_node_added(node_added, routing_table)
             }
             Event::NodeLost(node_lost, routing_table) => {
@@ -183,6 +186,12 @@ impl Vault {
 
         self.data_manager.check_timeouts(&mut self.routing_node);
         res
+    }
+
+    fn set_group_size(&mut self, our_section_size: usize) {
+        let group_size = cmp::min(our_section_size, GROUP_SIZE);
+        self.maid_manager.set_group_size(group_size);
+        self.data_manager.set_group_size(group_size);
     }
 
     fn on_request(&mut self,
