@@ -18,6 +18,7 @@
 // For explanation of lint checks, run `rustc -W help` or see
 // https://github.com/maidsafe/QA/blob/master/Documentation/Rust%20Lint%20Checks.md
 
+use fake_clock::FakeClock;
 use rand::Rng;
 use routing::{AccountInfo, Action, BootstrapConfig, ClientError, Event, FullId,
               MAX_IMMUTABLE_DATA_SIZE_IN_BYTES, MAX_MUTABLE_DATA_ENTRIES,
@@ -142,7 +143,7 @@ fn put_oversized_data() {
     // Too large immutable data
     let data =
         test_utils::gen_immutable_data(MAX_IMMUTABLE_DATA_SIZE_IN_BYTES as usize + 1, &mut rng);
-    match client.put_idata_response(data, &mut nodes) {
+    match client.put_large_sized_idata(data, &mut nodes) {
         Err(ClientError::DataTooLarge) => (),
         x => panic!("Unexpected response: {:?}", x),
     }
@@ -193,6 +194,15 @@ fn put_oversized_data() {
 
     match client.put_mdata_response(data, &mut nodes) {
         Err(ClientError::TooManyEntries) => (),
+        x => panic!("Unexpected response: {:?}", x),
+    }
+
+    // Larger than rate limiter per client capacity
+    FakeClock::advance_time(2000);
+    let data =
+        test_utils::gen_immutable_data(MAX_IMMUTABLE_DATA_SIZE_IN_BYTES as usize + 10240, &mut rng);
+    match client.put_large_sized_idata(data, &mut nodes) {
+        Err(ClientError::InvalidOperation) => (),
         x => panic!("Unexpected response: {:?}", x),
     }
 }
