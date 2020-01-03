@@ -140,7 +140,11 @@ pub(crate) fn destination_address(request: &Request) -> Option<Cow<XorName>> {
         } => Some(Cow::Borrowed(new_login_packet.destination())),
         UpdateLoginPacket(login_packet) => Some(Cow::Borrowed(login_packet.destination())),
         GetLoginPacket(ref name) => Some(Cow::Borrowed(name)),
-        GetBalance | ListAuthKeysAndVersion | InsAuthKey { .. } | DelAuthKey { .. } => None,
+        GetBalance
+        | ListAuthKeysAndVersion
+        | InsAuthKey { .. }
+        | DelAuthKey { .. }
+        | ConnectionInfoRequest => None,
     }
 }
 
@@ -220,7 +224,7 @@ pub(crate) fn authorisation_kind(request: &Request) -> AuthorisationKind {
             }
         }
         GetBalance => AuthorisationKind::GetBalance,
-        ListAuthKeysAndVersion | InsAuthKey { .. } | DelAuthKey { .. } => {
+        ListAuthKeysAndVersion | InsAuthKey { .. } | DelAuthKey { .. } | ConnectionInfoRequest => {
             AuthorisationKind::ManageAppKeys
         }
     }

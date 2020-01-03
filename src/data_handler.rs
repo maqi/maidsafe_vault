@@ -280,7 +280,8 @@ impl DataHandler {
             | ListAuthKeysAndVersion
             | InsAuthKey { .. }
             | TransferCoins { .. }
-            | DelAuthKey { .. } => {
+            | DelAuthKey { .. }
+            | ConnectionInfoRequest => {
                 error!(
                     "{}: Should not receive {:?} as a data handler.",
                     self, request
@@ -336,7 +337,8 @@ impl DataHandler {
             | Transaction(_)
             | GetBalance(_)
             | ListAuthKeysAndVersion(_)
-            | GetLoginPacket(_) => {
+            | GetLoginPacket(_)
+            | ConnectionInfoResponse(_) => {
                 error!(
                     "{}: Should not receive {:?} as a data handler.",
                     self, response

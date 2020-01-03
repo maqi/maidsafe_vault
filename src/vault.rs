@@ -430,6 +430,10 @@ impl<R: CryptoRng + Rng> Vault<R> {
                 | Rpc::Request {
                     request: Request::DelAuthKey { .. },
                     ..
+                }
+                | Rpc::Request {
+                    request: Request::ConnectionInfoRequest,
+                    ..
                 } => self
                     .client_handler_mut()?
                     .handle_vault_rpc(requester_name, rpc),

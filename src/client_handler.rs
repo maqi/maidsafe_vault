@@ -26,6 +26,7 @@ use bytes::Bytes;
 use lazy_static::lazy_static;
 use log::{debug, error, info, trace, warn};
 use rand::{CryptoRng, Rng};
+use routing::OrderedConnectionInfo;
 use safe_nd::{
     AData, ADataAddress, AppPermissions, AppPublicId, Coins, ConnectionInfo, Error as NdError,
     HandshakeRequest, HandshakeResponse, IData, IDataAddress, IDataKind, LoginPacket, MData,
@@ -409,6 +410,10 @@ impl ClientHandler {
             DelAuthKey { key, version } => {
                 self.handle_del_auth_key_client_req(client, key, version, message_id)
             }
+            //
+            // ===== Client to ClientHandlers =====
+            //
+            ConnectionInfoRequest => self.handle_connection_info_req(message_id),
         }
     }
 
@@ -875,6 +880,13 @@ impl ClientHandler {
                 );
                 None
             }
+            ConnectionInfoRequest => {
+                error!(
+                    "{}: Should not receive {:?} from other vault.",
+                    self, request
+                );
+                None
+            }
         }
     }
 
@@ -929,7 +941,8 @@ impl ClientHandler {
             | ListMDataPermissions(..)
             | GetMDataValue(..)
             | Mutation(..)
-            | Transaction(..) => {
+            | Transaction(..)
+            | ConnectionInfoResponse(..) => {
                 self.send_response_to_client(message_id, response);
                 None
             }
@@ -1642,6 +1655,20 @@ impl ClientHandler {
                 refund: None,
             },
         })
+    }
+
+    fn handle_connection_info_req(&mut self, message_id: MessageId) -> Option<Action> {
+        let response = if let Some(elders) = self.routing_node.borrow().our_elders_info() {
+            let connection_infos: Vec<_> = elders
+                .map(|elder| OrderedConnectionInfo(elder.connection_info().clone()))
+                .collect();
+            Response::ConnectionInfoResponse(Ok(connection_infos))
+        } else {
+            Response::ConnectionInfoResponse(Err(NdError::NetworkFailure))
+        };
+
+        self.send_response_to_client(message_id, response);
+        None
     }
 
     // Verify that valid signature is provided if the request requires it.
