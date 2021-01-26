@@ -136,7 +136,7 @@ pub async fn run_network() -> Result<(), String> {
 
     let mut verbosity_arg = String::from("-");
     if verbosity > 0 {
-        let v = "y".repeat(verbosity as usize);
+        let v = "v".repeat(verbosity as usize);
         info!("V: {}", v);
         verbosity_arg.push_str(&v);
         sn_launch_tool_args.push(&verbosity_arg);
